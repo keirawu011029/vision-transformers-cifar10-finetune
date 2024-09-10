@@ -8,6 +8,8 @@ written by @kentaroy47, @arutema47
 
 from __future__ import print_function
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -32,8 +34,8 @@ from models.convmixer import ConvMixer
 
 # parsers
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-parser.add_argument('--lr', default=1e-4, type=float, help='learning rate') # resnets.. 1e-3, Vit..1e-4
-parser.add_argument('--opt', default="adam")
+parser.add_argument('--lr', default=1e-2, type=float, help='learning rate') # resnets.. 1e-3, Vit..1e-4
+parser.add_argument('--opt', default="sgd")
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 parser.add_argument('--noaug', action='store_false', help='disable use randomaug')
 parser.add_argument('--noamp', action='store_true', help='disable mixed precision training. for older pytorch versions')
@@ -41,9 +43,9 @@ parser.add_argument('--nowandb', action='store_true', help='disable wandb')
 parser.add_argument('--mixup', action='store_true', help='add mixup augumentations')
 parser.add_argument('--net', default='vit')
 parser.add_argument('--dp', action='store_true', help='use data parallel')
-parser.add_argument('--bs', default='512')
+parser.add_argument('--bs', default='1200')
 parser.add_argument('--size', default="32")
-parser.add_argument('--n_epochs', type=int, default='200')
+parser.add_argument('--n_epochs', type=int, default='40')
 parser.add_argument('--patch', default='4', type=int, help="patch for ViT")
 parser.add_argument('--dimhead', default="512", type=int)
 parser.add_argument('--convkernel', default='8', type=int, help="parameter for convmixer")
@@ -51,7 +53,7 @@ parser.add_argument('--convkernel', default='8', type=int, help="parameter for c
 args = parser.parse_args()
 
 # take in args
-usewandb = ~args.nowandb
+usewandb = not args.nowandb
 if usewandb:
     import wandb
     watermark = "{}_lr{}".format(args.net, args.lr)
@@ -72,7 +74,7 @@ start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 # Data
 print('==> Preparing data..')
 if args.net=="vit_timm":
-    size = 384
+    size = 224
 else:
     size = imsize
 
@@ -100,7 +102,7 @@ trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=bs, shuffle=True, num_workers=8)
 
 testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8)
+testloader = torch.utils.data.DataLoader(testset, batch_size=bs, shuffle=False, num_workers=8)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
@@ -182,8 +184,9 @@ elif args.net=="vit":
 )
 elif args.net=="vit_timm":
     import timm
-    net = timm.create_model("vit_base_patch16_384", pretrained=True)
-    net.head = nn.Linear(net.head.in_features, 10)
+    # net = timm.create_model("vit_base_patch16_384", pretrained=True)
+    # net.head = nn.Linear(net.head.in_features, 10)
+    net = timm.create_model("vit_base_patch16_224", checkpoint_path='/workspace/wukehan/vision-transformers-cifar10/vit_base_patch16_224.pth.tar',num_classes=10)
 elif args.net=="cait":
     from models.cait import CaiT
     net = CaiT(
@@ -246,7 +249,7 @@ elif args.opt == "sgd":
     optimizer = optim.SGD(net.parameters(), lr=args.lr)  
     
 # use cosine scheduling
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.n_epochs)
+# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.n_epochs)
 
 ##### Training
 scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
@@ -299,20 +302,34 @@ def test(epoch):
     
     # Save checkpoint.
     acc = 100.*correct/total
-    if acc > best_acc:
-        print('Saving..')
-        state = {"model": net.state_dict(),
-              "optimizer": optimizer.state_dict(),
-              "scaler": scaler.state_dict()}
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/'+args.net+'-{}-ckpt.t7'.format(args.patch))
-        best_acc = acc
+    # if acc > best_acc:
+    #     print('Saving..')
+    #     state = {"model": net.state_dict(),
+    #           "optimizer": optimizer.state_dict(),
+    #           "scaler": scaler.state_dict()}
+    #     if not os.path.isdir('checkpoint'):
+    #         os.mkdir('checkpoint')
+    #     torch.save(state, './checkpoint/'+args.net+'-{}-ckpt.t7'.format(args.patch))
+    #     best_acc = acc
+
+
+    # Save checkpoint for every epoch
+    print(f'Saving checkpoint for epoch {epoch}...')
+    state = {
+        "model": net.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scaler": scaler.state_dict()
+    }
+    if not os.path.isdir(f'./checkpoint/{args.lr}'):
+        os.mkdir(f'./checkpoint/{args.lr}')
+    # Save the checkpoint with the epoch number
+    torch.save(state, f'./checkpoint/{args.lr}/epoch_{epoch}.pth')
+
     
     os.makedirs("log", exist_ok=True)
     content = time.ctime() + ' ' + f'Epoch {epoch}, lr: {optimizer.param_groups[0]["lr"]:.7f}, val loss: {test_loss:.5f}, acc: {(acc):.5f}'
     print(content)
-    with open(f'log/log_{args.net}_patch{args.patch}.txt', 'a') as appender:
+    with open(f'./checkpoint/{args.lr}/log_{args.net}_{args.lr}.txt', 'a') as appender:
         appender.write(content + "\n")
     return test_loss, acc
 
@@ -328,7 +345,7 @@ for epoch in range(start_epoch, args.n_epochs):
     trainloss = train(epoch)
     val_loss, acc = test(epoch)
     
-    scheduler.step(epoch-1) # step cosine scheduling
+    # scheduler.step(epoch-1) # step cosine scheduling
     
     list_loss.append(val_loss)
     list_acc.append(acc)
@@ -339,7 +356,7 @@ for epoch in range(start_epoch, args.n_epochs):
         "epoch_time": time.time()-start})
 
     # Write out csv..
-    with open(f'log/log_{args.net}_patch{args.patch}.csv', 'w') as f:
+    with open(f'./checkpoint/{args.lr}/log_{args.net}_{args.lr}.csv', 'w') as f:
         writer = csv.writer(f, lineterminator='\n')
         writer.writerow(list_loss) 
         writer.writerow(list_acc) 

@@ -1,3 +1,5 @@
+# my note
+the code and finetued models are on ai16
 # vision-transformers-cifar10
 This is your go-to playground for training Vision Transformers (ViT) and its related models on CIFAR-10, a common benchmark dataset in computer vision.
 
